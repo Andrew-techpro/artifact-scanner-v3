@@ -1,55 +1,56 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
 const fs = require('fs');
 const { GoogleGenAI } = require("@google/genai");
+const cloudinary = require('cloudinary').v2;
+require('dotenv').config();
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 10000;
 
-const apiKey = "AIzaSyBWFGa0KLEJ2KqoVIcktx199B2dlUydkv0";
-const ai = new GoogleGenAI({ apiKey });
-
-const storage = multer.diskStorage({
-    destination: './uploads/',
-    filename: (req, file, cb) => {
-        cb(null, 'art-' + Date.now() + path.extname(file.originalname));
-    }
+// Uses the Cloudinary keys you already added in Render
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
 });
-const upload = multer({ storage: storage });
 
+// Uses the GEMINI_API_KEY variable already in Render
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+const upload = multer({ dest: 'uploads/' });
 app.use(express.static('public'));
-app.use('/uploads', express.static('uploads'));
 app.use(express.json());
 
 app.post('/analyze', upload.single('artifact'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No file.' });
-        const modelName = "gemini-3-flash-preview";
+
+        // 1. Upload to Cloudinary for permanent storage
+        const cloudRes = await cloudinary.uploader.upload(req.file.path, { folder: 'artifacts' });
+
+        // 2. Analyze with Gemini 2.0 Flash
         const imageData = fs.readFileSync(req.file.path).toString("base64");
+        const result = await ai.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent([
+            "Identify this artifact. Format: Title: [Name] | Info: [4-sentence history]",
+            { inlineData: { data: imageData, mimeType: req.file.mimetype } }
+        ]);
 
-        const response = await ai.models.generateContent({
-            model: modelName,
-            contents: [{
-                role: 'user',
-                parts: [
-                    { text: "Act as an expert museum curator and historian. Identify this artifact's specific academic or museum title. Format exactly as: Title: [Academic Name] | Info: [4-5 sentence historical context]" },
-                    { inlineData: { data: imageData, mimeType: req.file.mimetype } }
-                ]
-            }]
-        });
-
-        const text = response.text;
-        let title = "Unidentified Artifact", info = text;
+        fs.unlinkSync(req.file.path);
+        const text = result.response.text();
+        
+        let title = "Artifact Identified", info = text;
         if (text.includes('|')) {
             const parts = text.split('|');
             title = parts[0].replace(/Title:/i, '').trim();
             info = parts[1].replace(/Info:/i, '').trim();
         }
-        res.json({ title, info, imageUrl: `/uploads/${req.file.filename}` });
+
+        res.json({ title, info, imageUrl: cloudRes.secure_url });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error(error);
+        res.status(500).json({ error: "Scanner Error" });
     }
 });
 
-app.listen(port, () => console.log(`🚀 http://localhost:${port}`));
+app.listen(port, () => console.log(`🚀 Live on port ${port}`));
