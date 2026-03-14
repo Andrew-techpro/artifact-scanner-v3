@@ -1,58 +1,61 @@
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
 const fs = require('fs');
 const { GoogleGenAI } = require("@google/generative-ai");
-const cloudinary = require('cloudinary').v2;
-require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 10000;
+const port = process.env.PORT || 10000; // Use Render's port
 
-// Cloudinary Config (Keys stay in Render Dashboard)
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
+const apiKey = process.env.GEMINI_KEY;
+const ai = new GoogleGenAI(apiKey);
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const dir = 'uploads';
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + path.extname(file.originalname));
+    }
 });
+const upload = multer({ storage: storage });
 
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
-
-const upload = multer({ dest: 'uploads/' });
 app.use(express.static('public'));
-app.use(express.json());
+app.use('/uploads', express.static('uploads'));
 
-app.post('/analyze', upload.single('artifact'), async (req, res) => {
+// ... [Your app.get('/') and other routes stay exactly the same] ...
+
+app.post('/upload', upload.single('image'), async (req, res) => {
+    if (!req.file) return res.send("No file selected.");
     try {
-        if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
-
-        // 1. Permanent storage on Cloudinary
-        const cloudRes = await cloudinary.uploader.upload(req.file.path, { folder: 'v3-scans' });
-
-        // 2. Analysis with Gemini 2.0 Flash
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-        const imageData = fs.readFileSync(req.file.path).toString("base64");
+        // Use Gemini 2.0 Flash (stable)
+        const model = ai.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const imageBase64 = fs.readFileSync(req.file.path).toString("base64");
         
         const result = await model.generateContent([
-            "Identify this artifact. Format: Title: [Name] | Info: [4-sentence history]",
-            { inlineData: { data: imageData, mimeType: req.file.mimetype } }
+            "Identify this artifact and explain its historical significance.",
+            { inlineData: { data: imageBase64, mimeType: req.file.mimetype } }
         ]);
 
-        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-
-        const text = result.response.text();
-        let title = "Artifact Found", info = text;
-        if (text.includes('|')) {
-            const parts = text.split('|');
-            title = parts[0].replace(/Title:/i, '').trim();
-            info = parts[1].replace(/Info:/i, '').trim();
-        }
-
-        res.json({ title, info, imageUrl: cloudRes.secure_url });
+        const fileBaseName = path.parse(req.file.filename).name;
+        const artifactData = {
+            id: fileBaseName,
+            imageFile: req.file.filename,
+            analysis: result.response.text(), // Fixed: .text() is a function
+            timestamp: new Date().toLocaleString('en-GB')
+        };
+        
+        fs.writeFileSync(path.join(__dirname, 'uploads', `${fileBaseName}.json`), JSON.stringify(artifactData, null, 2));
+        res.redirect('/history');
     } catch (error) {
-        console.error("DEPLOYMENT ERROR:", error);
-        res.status(500).json({ error: "Scanner Offline" });
+        console.error(error);
+        res.status(500).send("AI Error: " + error.message);
     }
 });
 
-// Important: Listen on 0.0.0.0 for Render
-app.listen(port, '0.0.0.0', () => console.log(`🚀 Live on port ${port}`));
+// [Rest of your delete and history routes stay the same]
+
+app.listen(port, '0.0.0.0', () => console.log(`✅ Port ${port}`));
