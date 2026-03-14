@@ -8,14 +8,13 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 10000;
 
-// Connect to Cloudinary (Keys are in Render Environment tab)
+// Cloudinary Config (Keys stay in Render Dashboard)
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Use the NEW API KEY you saved in Render
 const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
 
 const upload = multer({ dest: 'uploads/' });
@@ -26,7 +25,10 @@ app.post('/analyze', upload.single('artifact'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
 
+        // 1. Permanent storage on Cloudinary
         const cloudRes = await cloudinary.uploader.upload(req.file.path, { folder: 'v3-scans' });
+
+        // 2. Analysis with Gemini 2.0 Flash
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const imageData = fs.readFileSync(req.file.path).toString("base64");
         
@@ -35,9 +37,9 @@ app.post('/analyze', upload.single('artifact'), async (req, res) => {
             { inlineData: { data: imageData, mimeType: req.file.mimetype } }
         ]);
 
-        fs.unlinkSync(req.file.path);
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+
         const text = result.response.text();
-        
         let title = "Artifact Found", info = text;
         if (text.includes('|')) {
             const parts = text.split('|');
@@ -52,4 +54,5 @@ app.post('/analyze', upload.single('artifact'), async (req, res) => {
     }
 });
 
-app.listen(port, () => console.log(`🚀 Live on port ${port}`));
+// Important: Listen on 0.0.0.0 for Render
+app.listen(port, '0.0.0.0', () => console.log(`🚀 Live on port ${port}`));
