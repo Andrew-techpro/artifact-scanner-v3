@@ -1,14 +1,13 @@
 {
-  "name": "artifact-scanner",
+  "name": "artifact-ai",
   "version": "1.0.0",
+  "description": "AI-powered museum artifact scanner",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
   },
   "dependencies": {
     "@google/genai": "^0.21.0",
-    "cloudinary": "^2.5.1",
-    "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "multer": "^1.4.5-lts.1"
   }
